@@ -4,6 +4,7 @@ from image_lab.validation import Invalid
 from .catalog import Catalog
 from .maps import render, encode, seams, repeat, histogram
 from .delivery import bundle, import_bundle
+from .diff import compare, resolve_view
 
 
 def install(app,root):
@@ -81,6 +82,35 @@ def install(app,root):
     @api.post('/materials/<key>/snapshots/<sid>/restore')
     def restore(key,sid):
         return jsonify(catalog.restore(key,body()['revision'],sid))
+
+    def view_picture(key,view,channel):
+        p=catalog.read(key)
+        maps,_=resolve_view(catalog,p,view)
+        if channel not in maps:
+            raise Invalid('未知材质通道')
+        return maps[channel]
+
+    @api.get('/materials/<key>/view/<view>/map/<channel>.png')
+    def view_map(key,view,channel):
+        # 只读渲染：view 为 current 或历史版本 id，不修改当前材质
+        picture=view_picture(key,view,channel)
+        if request.args.get('repeat')=='1':
+            picture=repeat(picture)
+        return Response(encode(picture),mimetype='image/png',headers={'Cache-Control':'no-store'})
+
+    @api.get('/materials/<key>/compare/<view_a>/<view_b>/map/<channel>.png')
+    def compare_map(key,view_a,view_b,channel):
+        # 只读差异图：尺寸对齐、法线方向偏差，不修改当前材质
+        p=catalog.read(key)
+        result=compare(catalog,p,view_a,view_b,channel)
+        return Response(encode(result['picture']),mimetype='image/png',
+                        headers={'Cache-Control':'no-store'})
+
+    @api.get('/materials/<key>/compare/<view_a>/<view_b>/stats/<channel>')
+    def compare_stats(key,view_a,view_b,channel):
+        p=catalog.read(key)
+        result=compare(catalog,p,view_a,view_b,channel)
+        return jsonify({k:v for k,v in result.items() if k!='picture'})
 
     @api.get('/materials/<key>/export.zip')
     def export(key):

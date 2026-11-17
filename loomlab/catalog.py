@@ -1,11 +1,14 @@
 import copy
 import json
+import re
 import uuid
 import threading
 import time
 from pathlib import Path
 from image_lab.validation import Invalid, Conflict
 from .maps import settings, decode, encode
+
+ASSET_NAME = re.compile(r'[0-9a-f]{64}\.png')
 
 
 class Catalog:
@@ -77,6 +80,17 @@ class Catalog:
         if not p['source']:
             return None
         return decode((self.directory(p['id'])/p['source']).read_bytes())
+
+    def asset(self,key,name):
+        """只读读取材质目录内的不可变源图（含历史版本引用的源图）。"""
+        if not name:
+            return None
+        if not isinstance(name,str) or not ASSET_NAME.fullmatch(name):
+            raise Invalid('源图文件名无效')
+        path=self.directory(key)/name
+        if not path.is_file():
+            raise Invalid('版本引用的源图缺失')
+        return decode(path.read_bytes())
 
     def upload(self,key,revision,raw):
         import hashlib
