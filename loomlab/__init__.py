@@ -2,8 +2,9 @@ import io
 from flask import Blueprint, request, jsonify, Response, send_file, render_template
 from image_lab.validation import Invalid
 from .catalog import Catalog
-from .maps import render, encode, seams, repeat, histogram
+from .maps import render, encode, seams, repeat, histogram, fields, settings as current_settings
 from .delivery import bundle, import_bundle
+from .sample import parameters, budget, preview, write, VERTEX_LIMIT
 
 
 def install(app,root):
@@ -23,13 +24,17 @@ def install(app,root):
             raise Invalid('未知材质通道')
         return maps[channel]
 
+    def surface(p):
+        _,_,height,_,_,_ = fields(p,catalog.source(p))
+        return height
+
     @app.get('/')
     def home():
         return render_template('loom.html')
 
     @api.get('/health')
     def health():
-        return jsonify({'product':'LoomLab','status':'ok','materials':len(catalog.list()),'limits':{'size':1024,'source_pixels':16777216}})
+        return jsonify({'product':'LoomLab','status':'ok','materials':len(catalog.list()),'limits':{'size':1024,'source_pixels':16777216,'sample_vertices':VERTEX_LIMIT}})
 
     @api.get('/materials')
     def listing():
@@ -81,6 +86,34 @@ def install(app,root):
     @api.post('/materials/<key>/snapshots/<sid>/restore')
     def restore(key,sid):
         return jsonify(catalog.restore(key,body()['revision'],sid))
+
+    @api.get('/materials/<key>/sample/preview')
+    def sample_preview(key):
+        # 查询参数用于编辑中的实时预览；导出只读取已保存设置，保证工程可复现
+        p=catalog.read(key)
+        values=dict(p['settings'])
+        for query,field in (('width','sample_width'),('length','sample_length'),
+                            ('base','sample_base'),('relief','sample_relief'),('mesh','sample_mesh')):
+            if request.args.get(query) not in (None,''):
+                values[field]=request.args[query]
+        checked=current_settings({k:values[k] for k in ('sample_width','sample_length',
+                                                        'sample_base','sample_relief','sample_mesh')})
+        return jsonify(preview(surface(p),parameters(checked)))
+
+    @api.get('/materials/<key>/sample.obj')
+    def sample_export(key):
+        # 导出的必须是当前保存的材质设置和源图，保证工程保存后能复现同一块样片
+        p=catalog.read(key)
+        limits=parameters(p['settings'])
+        height=surface(p)
+        report=budget(limits)
+        if report['over_budget'] and request.args.get('confirm')!='1':
+            raise Invalid(f"样片约需 {report['vertices']} 个顶点（预算 {report['limit']}），会生成约 "
+                          f"{report['estimated_megabytes']}MB 的OBJ；请确认后再导出。尺寸与起伏保持不变")
+        stream=io.BytesIO()
+        write(stream,height,limits)
+        return send_file(io.BytesIO(stream.getvalue()),download_name='loomlab-relief-sample.obj',
+                         as_attachment=True,mimetype='model/obj')
 
     @api.get('/materials/<key>/export.zip')
     def export(key):

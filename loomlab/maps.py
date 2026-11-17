@@ -47,13 +47,19 @@ def color(value):
         raise Invalid('颜色须为#RRGGBB') from error
 
 
+SAMPLE_LABELS = {'sample_width':'样片长度','sample_length':'样片宽度','sample_base':'底板厚度',
+                 'sample_relief':'最大起伏','sample_mesh':'网格密度'}
+
+
 def settings(data=None):
     result = {'size':256,'repeat_x':12,'repeat_y':12,'weave':'plain',
               'warp':'#b06b47','weft':'#d5bd83','gap':.18,'relief':.65,
               'height_blur':.6,'height_low':0.,'height_high':1.,'invert':False,
               'normal_strength':3.,'normal_y':'up','roughness':.65,'roughness_detail':.2,
               'ao_radius':3.,'ao_strength':1.5,'source_scale':1.,'source_x':0.,'source_y':0.,
-              'source_turn':0.,'light_azimuth':315.,'light_elevation':45.}
+              'source_turn':0.,'light_azimuth':315.,'light_elevation':45.,
+              'sample_width':100.,'sample_length':100.,'sample_base':2.,
+              'sample_relief':3.,'sample_mesh':192}
     if data:
         unknown = set(data)-set(result)
         if unknown:
@@ -65,9 +71,11 @@ def settings(data=None):
                       ('roughness',0,1),('roughness_detail',0,1),('ao_radius',1,32),
                       ('ao_strength',0,8),('source_scale',.1,10),('source_x',-2,2),
                       ('source_y',-2,2),('source_turn',-360,360),
-                      ('light_azimuth',0,360),('light_elevation',5,90)]:
-        result[key] = number(result[key],lo,hi,key)
-    for key in ('size','repeat_x','repeat_y'):
+                      ('light_azimuth',0,360),('light_elevation',5,90),
+                      ('sample_width',1,400),('sample_length',1,400),('sample_base',.2,30),
+                      ('sample_relief',.05,30),('sample_mesh',16,1024)]:
+        result[key] = number(result[key],lo,hi,SAMPLE_LABELS.get(key,key))
+    for key in ('size','repeat_x','repeat_y','sample_mesh'):
         if result[key] != int(result[key]):
             raise Invalid(key+'需要整数')
         result[key] = int(result[key])
@@ -149,6 +157,19 @@ def height_map(base,raw_height,s):
     return h.astype(np.float32)
 
 
+def resample(height,n):
+    # 顶点位于网格角点，横纵坐标精确覆盖0..尺寸；纹理坐标在t=1处环绕回起点
+    size = height.shape[0]
+    t = np.arange(n,dtype=np.float32)/(n-1) if n > 1 else np.zeros(1,np.float32)
+    u = t*size
+    i0 = np.floor(u).astype(np.int64)%size
+    f = (u-np.floor(u)).astype(np.float32)
+    i1 = (i0+1)%size
+    rows = height[i0,:]*(1-f)[:,None]+height[i1,:]*f[:,None]
+    columns = rows[:,i0]*(1-f)[None,:]+rows[:,i1]*f[None,:]
+    return np.clip(columns,0,1).astype(np.float32)
+
+
 def normals(height,s):
     dx = (np.roll(height,-1,axis=1)-np.roll(height,1,axis=1))*.5
     dy = (np.roll(height,-1,axis=0)-np.roll(height,1,axis=0))*.5
@@ -189,7 +210,7 @@ def shade(base,normal,rough,ao,s):
     return np.clip(srgb(lit),0,1)
 
 
-def render(project,source=None):
+def fields(project,source=None):
     s = settings(project['settings'])
     if project['mode']=='source' and source is not None:
         base,raw = sample_source(source,s),None
@@ -199,6 +220,11 @@ def render(project,source=None):
     normal = normals(height,s)
     rough = roughness(height,s)
     ao = occlusion(height,s)
+    return s,base,height,normal,rough,ao
+
+
+def render(project,source=None):
+    s,base,height,normal,rough,ao = fields(project,source)
     return {'albedo':image(base),'height':image(height),'normal':image(normal*.5+.5),
             'roughness':image(rough),'ao':image(ao),'preview':image(shade(base,normal,rough,ao,s)),
             'orm':image(np.stack([ao,rough,np.zeros_like(ao)],axis=2))}
