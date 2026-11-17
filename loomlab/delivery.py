@@ -21,8 +21,12 @@ def bundle(catalog,p,editable=False):
                     z.writestr(name+'.png',encode(picture))
             z.writestr('material.json',json.dumps({'format':'loomlab-pbr-1','name':p['name'],
                 'revision':p['revision'],'size':p['settings']['size'],'normal_y':p['settings']['normal_y'],
-                'color_spaces':{'albedo':'sRGB','height':'linear','normal':'linear','roughness':'linear','ao':'linear','orm':'linear'},
+                'color_spaces':{'albedo':'sRGB','height':'linear','normal':'linear','roughness':'linear','ao':'linear','orm':'linear','wear':'linear'},
                 'orm':{'r':'ao','g':'roughness','b':'metallic=0'},
+                'wear':{'enabled':p['settings']['wear'],'coverage':p['settings']['wear_coverage'],
+                        'strength':p['settings']['wear_strength'],'patch':p['settings']['wear_patch'],
+                        'seed':p['settings']['wear_seed'],
+                        'mask':'wear.png; 白=完全磨损，黑=保留；未开启磨损时为全黑'},
                 'height':'normalized relative height; no measured displacement unit'},ensure_ascii=False,indent=2))
     return stream.getvalue()
 
@@ -39,12 +43,12 @@ def import_bundle(catalog,raw):
             if len(names)!=len(set(names)) or any('/' in n or '\\' in n for n in names):
                 raise Invalid('工程文件名无效')
             p=json.loads(z.read('material.json'))
-            settings(p['settings'])
+            p['settings']=settings(p['settings'])
             if p['mode'] not in ('weave','source') or not isinstance(p['snapshots'],list) or len(p['snapshots'])>30:
                 raise Invalid('工程材质结构无效')
             sources={p.get('source')}
             for snap in p['snapshots']:
-                settings(snap['settings'])
+                snap['settings']=settings(snap['settings'])
                 if snap['mode'] not in ('weave','source'):
                     raise Invalid('版本模式无效')
                 sources.add(snap.get('source'))

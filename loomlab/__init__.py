@@ -23,6 +23,10 @@ def install(app,root):
             raise Invalid('未知材质通道')
         return maps[channel]
 
+    def attachment(picture,name,disposition='inline'):
+        return Response(encode(picture),mimetype='image/png',
+            headers={'Cache-Control':'no-store','Content-Disposition':f'{disposition}; filename="{name}"'})
+
     @app.get('/')
     def home():
         return render_template('loom.html')
@@ -66,7 +70,12 @@ def install(app,root):
         picture=output(catalog.read(key),channel)
         if request.args.get('repeat')=='1':
             picture=repeat(picture)
-        return Response(encode(picture),mimetype='image/png',headers={'Cache-Control':'no-store'})
+        return attachment(picture,'loomlab-'+channel+'.png')
+
+    @api.get('/materials/<key>/map/wear.png/download')
+    def wear_download(key):
+        p=catalog.read(key)
+        return attachment(output(p,'wear'),'loomlab-wear-mask.png','attachment')
 
     @api.get('/materials/<key>/inspect/<channel>')
     def inspect(key,channel):

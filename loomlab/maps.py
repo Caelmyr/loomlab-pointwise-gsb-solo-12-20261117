@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image, ImageOps
 from scipy.ndimage import gaussian_filter, uniform_filter
 from image_lab.validation import Invalid
+from . import wear
 
 
 def encode(image):
@@ -53,7 +54,9 @@ def settings(data=None):
               'height_blur':.6,'height_low':0.,'height_high':1.,'invert':False,
               'normal_strength':3.,'normal_y':'up','roughness':.65,'roughness_detail':.2,
               'ao_radius':3.,'ao_strength':1.5,'source_scale':1.,'source_x':0.,'source_y':0.,
-              'source_turn':0.,'light_azimuth':315.,'light_elevation':45.}
+              'source_turn':0.,'light_azimuth':315.,'light_elevation':45.,
+              'wear':False,'wear_coverage':.35,'wear_strength':.8,'wear_patch':.25,
+              'wear_seed':1}
     if data:
         unknown = set(data)-set(result)
         if unknown:
@@ -65,9 +68,11 @@ def settings(data=None):
                       ('roughness',0,1),('roughness_detail',0,1),('ao_radius',1,32),
                       ('ao_strength',0,8),('source_scale',.1,10),('source_x',-2,2),
                       ('source_y',-2,2),('source_turn',-360,360),
-                      ('light_azimuth',0,360),('light_elevation',5,90)]:
+                      ('light_azimuth',0,360),('light_elevation',5,90),
+                      ('wear_coverage',0,1),('wear_strength',0,1),('wear_patch',.02,1),
+                      ('wear_seed',0,4294967295)]:
         result[key] = number(result[key],lo,hi,key)
-    for key in ('size','repeat_x','repeat_y'):
+    for key in ('size','repeat_x','repeat_y','wear_seed'):
         if result[key] != int(result[key]):
             raise Invalid(key+'需要整数')
         result[key] = int(result[key])
@@ -77,6 +82,8 @@ def settings(data=None):
         raise Invalid('组织支持plain/twill/basket')
     if result['normal_y'] not in ('up','down'):
         raise Invalid('法线Y方向支持up/down')
+    if not isinstance(result['wear'],bool):
+        raise Invalid('磨损开关需要布尔值')
     result['invert'] = bool(result['invert'])
     color(result['warp'])
     color(result['weft'])
@@ -196,11 +203,19 @@ def render(project,source=None):
     else:
         base,raw = weave(s)
     height = height_map(base,raw,s)
+    wear_mask = np.zeros_like(height)
+    rough_lift = np.zeros_like(height)
+    if s['wear']:
+        # 遮罩始终按当前高度与覆盖程度生成，便于在强度为0时单独预览覆盖范围。
+        wear_mask,fiber = wear.mask(height,s)
+        if s['wear_strength']>0:
+            base,height,rough_lift = wear.apply(base,height,s,wear_mask,fiber)
     normal = normals(height,s)
-    rough = roughness(height,s)
+    rough = np.clip(roughness(height,s)+rough_lift,0,1)
     ao = occlusion(height,s)
     return {'albedo':image(base),'height':image(height),'normal':image(normal*.5+.5),
-            'roughness':image(rough),'ao':image(ao),'preview':image(shade(base,normal,rough,ao,s)),
+            'roughness':image(rough),'ao':image(ao),'wear':image(wear_mask),
+            'preview':image(shade(base,normal,rough,ao,s)),
             'orm':image(np.stack([ao,rough,np.zeros_like(ao)],axis=2))}
 
 

@@ -103,7 +103,7 @@ class Catalog:
             snap=next((v for v in p['snapshots'] if v['id']==sid),None)
             if snap is None:
                 raise Invalid('版本不存在')
-            p['settings']=copy.deepcopy(snap['settings'])
+            p['settings']=settings(copy.deepcopy(snap['settings']))
             p['mode']=snap['mode']
             p['source']=snap['source']
         return self.change(key,revision,apply)
