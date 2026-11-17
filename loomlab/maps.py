@@ -3,7 +3,7 @@ import hashlib
 import math
 import numpy as np
 from PIL import Image, ImageOps
-from scipy.ndimage import gaussian_filter, uniform_filter
+from scipy.ndimage import gaussian_filter, uniform_filter, map_coordinates
 from image_lab.validation import Invalid
 
 
@@ -85,6 +85,22 @@ def settings(data=None):
 
 def image(array):
     return Image.fromarray(np.round(np.clip(array,0,1)*255).astype('uint8'))
+
+
+MASK_KEYS=('mask_scale','mask_x','mask_y','mask_invert')
+
+def blend_transform(data=None):
+    result={'mask_scale':1.,'mask_x':0.,'mask_y':0.,'mask_invert':False}
+    if data:
+        unknown=set(data)-set(result)
+        if unknown:
+            raise Invalid('不支持遮罩设置：'+', '.join(sorted(unknown)))
+        result.update(data)
+    result['mask_scale']=number(result['mask_scale'],.05,20,'遮罩缩放')
+    result['mask_x']=number(result['mask_x'],-2,2,'遮罩横移')
+    result['mask_y']=number(result['mask_y'],-2,2,'遮罩纵移')
+    result['mask_invert']=bool(result['mask_invert'])
+    return result
 
 
 def linear(rgb):
@@ -189,16 +205,68 @@ def shade(base,normal,rough,ao,s):
     return np.clip(srgb(lit),0,1)
 
 
-def render(project,source=None):
-    s = settings(project['settings'])
-    if project['mode']=='source' and source is not None:
+def base_maps(mode,s,source=None):
+    if mode=='source' and source is not None:
         base,raw = sample_source(source,s),None
     else:
         base,raw = weave(s)
     height = height_map(base,raw,s)
+    return base,height,roughness(height,s),occlusion(height,s)
+
+
+def mask_map(blend,s,picture=None):
+    n = s['size']
+    if picture is None:
+        t = (np.arange(n,dtype=np.float32)+.5)/n
+        m = np.broadcast_to((.5-.5*np.cos(2*np.pi*t))[None,:],(n,n)).copy()
+    else:
+        g = np.asarray(picture.convert('L'),dtype=np.float32)/255
+        gh,gw = g.shape
+        y,x = np.mgrid[:n,:n].astype(np.float32)
+        u = ((x+.5)/n-.5)/blend.get('mask_scale',1.)+.5+blend.get('mask_x',0.)
+        v = ((y+.5)/n-.5)/blend.get('mask_scale',1.)+.5+blend.get('mask_y',0.)
+        m = map_coordinates(g,[v*gh-.5,u*gw-.5],order=1,mode='wrap')
+    if blend.get('mask_invert'):
+        m = 1-m
+    return np.clip(m,0,1).astype(np.float32)
+
+
+def render_blend(project,s,images):
+    blend = project['blend']
+    sub = {}
+    for side in ('a','b'):
+        child = blend[side]
+        cs = settings({**child['settings'],'size':s['size']})
+        if child['mode']=='source':
+            if side not in images:
+                raise Invalid('混合来源缺少源图')
+            sub[side] = base_maps('source',cs,images[side])+(cs,)
+        else:
+            sub[side] = base_maps('weave',cs)+(cs,)
+    m = mask_map(blend,s,images.get('mask'))
+    m3 = m[:,:,None]
+    (ba,ha,ra,oa,_),(bb,hb,rb,ob,_) = sub['a'],sub['b']
+    albedo = srgb(linear(ba)*(1-m3)+linear(bb)*m3)
+    height = ha*(1-m)+hb*m
+    rough = ra*(1-m)+rb*m
+    ao = oa*(1-m)+ob*m
     normal = normals(height,s)
-    rough = roughness(height,s)
-    ao = occlusion(height,s)
+    result = {'albedo':image(albedo),'height':image(height),'normal':image(normal*.5+.5),
+              'roughness':image(rough),'ao':image(ao),
+              'preview':image(shade(albedo,normal,rough,ao,s)),
+              'orm':image(np.stack([ao,rough,np.zeros_like(ao)],axis=2)),
+              'mask':image(m)}
+    for side,(base,h,r,o,cs) in sub.items():
+        result[side] = image(shade(base,normals(h,cs),r,o,cs))
+    return result
+
+
+def render(project,source=None,blend_images=None):
+    s = settings(project['settings'])
+    if project['mode']=='blend':
+        return render_blend(project,s,blend_images or {})
+    base,height,rough,ao = base_maps(project['mode'],s,source)
+    normal = normals(height,s)
     return {'albedo':image(base),'height':image(height),'normal':image(normal*.5+.5),
             'roughness':image(rough),'ao':image(ao),'preview':image(shade(base,normal,rough,ao,s)),
             'orm':image(np.stack([ao,rough,np.zeros_like(ao)],axis=2))}

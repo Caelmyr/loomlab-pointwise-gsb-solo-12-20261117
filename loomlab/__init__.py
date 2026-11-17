@@ -18,7 +18,7 @@ def install(app,root):
         return d
 
     def output(p,channel):
-        maps=render(p,catalog.source(p))
+        maps=render(p,catalog.source(p),catalog.blend_images(p))
         if channel not in maps:
             raise Invalid('未知材质通道')
         return maps[channel]
@@ -45,6 +45,11 @@ def install(app,root):
         p=catalog.update(p['id'],p['revision'],{'settings':{'weave':'twill','repeat_x':16,'repeat_y':16,'warp':'#a04c35','weft':'#e1c79d'}})
         return jsonify(p),201
 
+    @api.post('/blend')
+    def blend_create():
+        d=body()
+        return jsonify(catalog.create_blend(d.get('name','混合材质'),d.get('a',''),d.get('b',''))),201
+
     @api.get('/materials/<key>')
     def read(key):
         return jsonify(catalog.read(key))
@@ -60,6 +65,13 @@ def install(app,root):
         if file is None:
             raise Invalid('请选择源图')
         return jsonify(catalog.upload(key,int(request.form['revision']),file.read()))
+
+    @api.post('/materials/<key>/mask')
+    def mask_upload(key):
+        file=request.files.get('file')
+        if file is None:
+            raise Invalid('请选择遮罩灰度图')
+        return jsonify(catalog.upload_mask(key,int(request.form['revision']),file.read()))
 
     @api.get('/materials/<key>/map/<channel>.png')
     def map_image(key,channel):
