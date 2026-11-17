@@ -2,7 +2,7 @@ import io
 from flask import Blueprint, request, jsonify, Response, send_file, render_template
 from image_lab.validation import Invalid
 from .catalog import Catalog
-from .maps import render, encode, seams, repeat, histogram
+from .maps import render, encode, seams, repeat, histogram, weave_info
 from .delivery import bundle, import_bundle
 
 
@@ -29,7 +29,7 @@ def install(app,root):
 
     @api.get('/health')
     def health():
-        return jsonify({'product':'LoomLab','status':'ok','materials':len(catalog.list()),'limits':{'size':1024,'source_pixels':16777216}})
+        return jsonify({'product':'LoomLab','status':'ok','materials':len(catalog.list()),'limits':{'size':1024,'source_pixels':16777216,'weave_grid':64,'weave_colors':16,'yarns_per_direction':256}})
 
     @api.get('/materials')
     def listing():
@@ -72,6 +72,10 @@ def install(app,root):
     def inspect(key,channel):
         picture=output(catalog.read(key),channel)
         return jsonify({'channel':channel,'size':list(picture.size),'seams':seams(picture),'histogram':histogram(picture)})
+
+    @api.get('/materials/<key>/weave-info')
+    def info(key):
+        return jsonify(weave_info(catalog.read(key)))
 
     @api.post('/materials/<key>/snapshots')
     def snapshot(key):

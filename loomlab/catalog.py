@@ -64,7 +64,13 @@ class Catalog:
             if 'name' in data:
                 p['name']=str(data['name'])[:100]
             if 'settings' in data:
-                p['settings']=settings({**p['settings'],**data['settings']})
+                merged={**p['settings'],**data['settings']}
+                # 旧客户端只提交单色字段时，配色循环跟随单色，避免残留旧循环
+                if 'warp_colors' not in data['settings'] and 'warp' in data['settings']:
+                    merged['warp_colors']=[data['settings']['warp']]
+                if 'weft_colors' not in data['settings'] and 'weft' in data['settings']:
+                    merged['weft_colors']=[data['settings']['weft']]
+                p['settings']=settings(merged)
             if 'mode' in data:
                 if data['mode'] not in ('weave','source'):
                     raise Invalid('模式须为weave/source')

@@ -3,7 +3,7 @@ import json
 import zipfile
 import re
 from image_lab.validation import Invalid
-from .maps import encode, render, settings, decode
+from .maps import encode, render, settings, decode, weave_info
 
 
 def bundle(catalog,p,editable=False):
@@ -21,6 +21,7 @@ def bundle(catalog,p,editable=False):
                     z.writestr(name+'.png',encode(picture))
             z.writestr('material.json',json.dumps({'format':'loomlab-pbr-1','name':p['name'],
                 'revision':p['revision'],'size':p['settings']['size'],'normal_y':p['settings']['normal_y'],
+                'weave':weave_info(p),
                 'color_spaces':{'albedo':'sRGB','height':'linear','normal':'linear','roughness':'linear','ao':'linear','orm':'linear'},
                 'orm':{'r':'ao','g':'roughness','b':'metallic=0'},
                 'height':'normalized relative height; no measured displacement unit'},ensure_ascii=False,indent=2))
