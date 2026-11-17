@@ -21,6 +21,7 @@ def bundle(catalog,p,editable=False):
                     z.writestr(name+'.png',encode(picture))
             z.writestr('material.json',json.dumps({'format':'loomlab-pbr-1','name':p['name'],
                 'revision':p['revision'],'size':p['settings']['size'],'normal_y':p['settings']['normal_y'],
+                'source_filter':p['settings']['source_filter'],
                 'color_spaces':{'albedo':'sRGB','height':'linear','normal':'linear','roughness':'linear','ao':'linear','orm':'linear'},
                 'orm':{'r':'ao','g':'roughness','b':'metallic=0'},
                 'height':'normalized relative height; no measured displacement unit'},ensure_ascii=False,indent=2))
@@ -39,11 +40,15 @@ def import_bundle(catalog,raw):
             if len(names)!=len(set(names)) or any('/' in n or '\\' in n for n in names):
                 raise Invalid('工程文件名无效')
             p=json.loads(z.read('material.json'))
+            if 'source_filter' not in p['settings']:
+                p['settings']['source_filter']='nearest'
             settings(p['settings'])
             if p['mode'] not in ('weave','source') or not isinstance(p['snapshots'],list) or len(p['snapshots'])>30:
                 raise Invalid('工程材质结构无效')
             sources={p.get('source')}
             for snap in p['snapshots']:
+                if 'source_filter' not in snap['settings']:
+                    snap['settings']['source_filter']='nearest'
                 settings(snap['settings'])
                 if snap['mode'] not in ('weave','source'):
                     raise Invalid('版本模式无效')

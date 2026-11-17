@@ -52,7 +52,8 @@ def settings(data=None):
               'warp':'#b06b47','weft':'#d5bd83','gap':.18,'relief':.65,
               'height_blur':.6,'height_low':0.,'height_high':1.,'invert':False,
               'normal_strength':3.,'normal_y':'up','roughness':.65,'roughness_detail':.2,
-              'ao_radius':3.,'ao_strength':1.5,'source_scale':1.,'source_x':0.,'source_y':0.,
+              'ao_radius':3.,'ao_strength':1.5,'source_filter':'smooth',
+              'source_scale':1.,'source_x':0.,'source_y':0.,
               'source_turn':0.,'light_azimuth':315.,'light_elevation':45.}
     if data:
         unknown = set(data)-set(result)
@@ -77,6 +78,8 @@ def settings(data=None):
         raise Invalid('组织支持plain/twill/basket')
     if result['normal_y'] not in ('up','down'):
         raise Invalid('法线Y方向支持up/down')
+    if result['source_filter'] not in ('nearest','smooth'):
+        raise Invalid('源图采样支持nearest/smooth')
     result['invert'] = bool(result['invert'])
     color(result['warp'])
     color(result['weft'])
@@ -119,7 +122,102 @@ def weave(s):
     return base.astype(np.float32),height.astype(np.float32)
 
 
+_LINEAR_LUT = linear(np.arange(256,dtype=np.float32)/255).astype(np.float32)
+
+
+def _premultiplied(source):
+    rgba = np.asarray(source)
+    if rgba.dtype != np.uint8 or rgba.ndim != 3 or rgba.shape[2] != 4:
+        rgba = np.clip(np.asarray(source,dtype=np.float32),0,255).astype(np.uint8)
+    height,width = rgba.shape[:2]
+    result = np.empty((height,width,4),dtype=np.float32)
+    alpha = result[:,:,3]
+    np.multiply(rgba[:,:,3],1/255,out=alpha)
+    for channel in range(3):
+        np.multiply(_LINEAR_LUT[rgba[:,:,channel]],alpha,out=result[:,:,channel])
+    return result
+
+
+def _halve(plane,block=256):
+    weights = (1/16,4/16,6/16,4/16,1/16)
+    h,w,channels = plane.shape
+    nw = (w+1)//2
+    xs = np.arange(nw,dtype=np.int64)*2
+    horizontal = np.empty((h,nw,channels),dtype=np.float32)
+    for start in range(0,h,block):
+        stop = min(h,start+block)
+        part = plane[start:stop]
+        total = np.zeros((stop-start,nw,channels),dtype=np.float32)
+        for tap,weight in zip((-2,-1,0,1,2),weights):
+            total += np.take(part,(xs+tap)%w,axis=1)*weight
+        horizontal[start:stop] = total
+    nh = (h+1)//2
+    ys = np.arange(nh,dtype=np.int64)*2
+    result = np.empty((nh,nw,channels),dtype=np.float32)
+    for start in range(0,nh,block):
+        stop = min(nh,start+block)
+        total = np.zeros((stop-start,nw,channels),dtype=np.float32)
+        for tap,weight in zip((-2,-1,0,1,2),weights):
+            total += np.take(horizontal,(ys[start:stop]+tap)%h,axis=0)*weight
+        result[start:stop] = total
+    return result
+
+
+def _bilinear(plane,tx,ty):
+    height,width,channels = plane.shape
+    x0 = np.floor(tx).astype(np.int64)
+    y0 = np.floor(ty).astype(np.int64)
+    fx = (tx-x0).astype(np.float32)
+    fy = (ty-y0).astype(np.float32)
+    xa,xb = x0%width,(x0+1)%width
+    ya,yb = y0%height,(y0+1)%height
+    flat = plane.reshape(-1,channels)
+    top = flat[ya*width+xa]*(1-fx)[:,:,None]+flat[ya*width+xb]*fx[:,:,None]
+    bottom = flat[yb*width+xa]*(1-fx)[:,:,None]+flat[yb*width+xb]*fx[:,:,None]
+    return top*(1-fy)[:,:,None]+bottom*fy[:,:,None]
+
+
+def _level_of_detail(w,h,s):
+    angle = math.radians(s['source_turn'])
+    step = 1/(s['size']*s['source_scale'])
+    transform = np.array([[w*math.cos(angle)*step,w*math.sin(angle)*step],
+                          [-h*math.sin(angle)*step,h*math.cos(angle)*step]])
+    footprint = math.sqrt(abs(float(np.linalg.det(transform))))
+    return max(0.,math.log2(max(footprint,1e-12)))
+
+
+def _sample_smooth(source,s):
+    rgba = _premultiplied(source)
+    h,w = rgba.shape[:2]
+    n = s['size']
+    y,x = np.mgrid[:n,:n].astype(np.float32)
+    u = ((x+.5)/n-.5)/s['source_scale']
+    v = ((y+.5)/n-.5)/s['source_scale']
+    theta = math.radians(s['source_turn'])
+    su = u*math.cos(theta)+v*math.sin(theta)+.5+s['source_x']
+    sv = -u*math.sin(theta)+v*math.cos(theta)+.5+s['source_y']
+    cx = su*w-.5
+    cy = sv*h-.5
+    lod = max(0.,min(_level_of_detail(w,h,s),math.log2(max(w,h))))
+    coarse = rgba
+    low = 0
+    while low < int(math.floor(lod)) and (coarse.shape[0] > 1 or coarse.shape[1] > 1):
+        coarse = _halve(coarse)
+        low += 1
+    fraction = np.float32(max(0.,min(1.,lod-low)))
+    sampled = _bilinear(coarse,cx/(2**low),cy/(2**low))
+    if fraction > 0 and (coarse.shape[0] > 1 or coarse.shape[1] > 1):
+        next_level = _halve(coarse)
+        detail = _bilinear(next_level,cx/(2**(low+1)),cy/(2**(low+1)))
+        sampled = sampled*(1-fraction)+detail*fraction
+    alpha = sampled[:,:,3:4]
+    composed = sampled[:,:,:3]+linear(np.array(.055,dtype=np.float32))*(1-alpha)
+    return srgb(composed).astype(np.float32)
+
+
 def sample_source(source,s):
+    if s['source_filter']=='smooth':
+        return _sample_smooth(source,s)
     n = s['size']
     rgba = np.asarray(source,dtype=np.float32)/255
     h,w = rgba.shape[:2]

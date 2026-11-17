@@ -24,7 +24,20 @@ class Catalog:
             path = self.directory(key)/'material.json'
             if not path.is_file():
                 raise Invalid('材质不存在')
-            return json.loads(path.read_text())
+            p = json.loads(path.read_text())
+            stored = p.get('settings',{})
+            defaults = settings()
+            if 'source_filter' not in stored:
+                defaults['source_filter'] = 'nearest'
+            defaults.update(stored)
+            p['settings'] = defaults
+            for snap in p.get('snapshots',[]):
+                saved = snap.get('settings',{})
+                snapshot = {**defaults,**saved}
+                if 'source_filter' not in saved:
+                    snapshot['source_filter'] = 'nearest'
+                snap['settings'] = snapshot
+            return p
 
     def write(self,p):
         directory = self.directory(p['id'])
