@@ -51,6 +51,7 @@ def settings(data=None):
     result = {'size':256,'repeat_x':12,'repeat_y':12,'weave':'plain',
               'warp':'#b06b47','weft':'#d5bd83','gap':.18,'relief':.65,
               'height_blur':.6,'height_low':0.,'height_high':1.,'invert':False,
+              'delight':False,'delight_scale':16.,'delight_strength':.8,
               'normal_strength':3.,'normal_y':'up','roughness':.65,'roughness_detail':.2,
               'ao_radius':3.,'ao_strength':1.5,'source_scale':1.,'source_x':0.,'source_y':0.,
               'source_turn':0.,'light_azimuth':315.,'light_elevation':45.}
@@ -61,7 +62,9 @@ def settings(data=None):
         result.update(data)
     for key,lo,hi in [('size',32,1024),('repeat_x',1,64),('repeat_y',1,64),
                       ('gap',.02,.8),('relief',0,1),('height_blur',0,12),
-                      ('height_low',0,1),('height_high',0,1),('normal_strength',0,20),
+                      ('height_low',0,1),('height_high',0,1),
+                      ('delight_scale',2,256),('delight_strength',0,1),
+                      ('normal_strength',0,20),
                       ('roughness',0,1),('roughness_detail',0,1),('ao_radius',1,32),
                       ('ao_strength',0,8),('source_scale',.1,10),('source_x',-2,2),
                       ('source_y',-2,2),('source_turn',-360,360),
@@ -78,6 +81,7 @@ def settings(data=None):
     if result['normal_y'] not in ('up','down'):
         raise Invalid('法线Y方向支持up/down')
     result['invert'] = bool(result['invert'])
+    result['delight'] = bool(result['delight'])
     color(result['warp'])
     color(result['weft'])
     return result
@@ -135,18 +139,42 @@ def sample_source(source,s):
     return srgb(linear(sampled[:,:,:3])*sampled[:,:,3:]+linear(np.array(.055))*(1-sampled[:,:,3:]))
 
 
-def height_map(base,raw_height,s):
+def grayscale(base,raw_height):
     if raw_height is None:
         rgb = linear(base)
         h = rgb[:,:,0]*.2126+rgb[:,:,1]*.7152+rgb[:,:,2]*.0722
     else:
-        h = raw_height.copy()
+        h = raw_height
+    return np.clip(h,0,1).astype(np.float32)
+
+
+def remove_illumination(h,s):
+    """估计并扣除缓慢明暗变化。
+
+    用 wrap 模式大尺度高斯滤波估计照明基线（与平铺边界一致，不产生接缝条纹），
+    再以加法高通 h - strength*(基线-均值) 去除大范围光照。全程只做加减与裁剪：
+    纯色或大面积近黑图像的基线与画面相同，结果保持恒定，不会出现除法导致的
+    无穷值、放大噪声或突然顶满；细织纹属于高频分量，原样保留。
+    """
+    slow = gaussian_filter(h,float(s['delight_scale']),mode='wrap')
+    corrected = h - s['delight_strength']*(slow-slow.mean())
+    return slow.astype(np.float32),np.clip(corrected,0,1).astype(np.float32)
+
+
+def height_levels(h,s):
     h = np.clip((h-s['height_low'])/(s['height_high']-s['height_low']),0,1)
     if s['invert']:
         h = 1-h
     if s['height_blur']:
         h = gaussian_filter(h,s['height_blur'],mode='wrap')
     return h.astype(np.float32)
+
+
+def height_map(base,raw_height,s):
+    h = grayscale(base,raw_height)
+    if s['delight']:
+        _,h = remove_illumination(h,s)
+    return height_levels(h,s)
 
 
 def normals(height,s):
@@ -195,13 +223,24 @@ def render(project,source=None):
         base,raw = sample_source(source,s),None
     else:
         base,raw = weave(s)
-    height = height_map(base,raw,s)
+    gray = grayscale(base,raw)
+    if s['delight']:
+        slow,cleaned = remove_illumination(gray,s)
+        height = height_levels(cleaned,s)
+        diagnostics = {'height_raw':image(height_levels(gray,s)),
+                       'illumination':image(slow),
+                       'height_delight':image(height)}
+    else:
+        height = height_levels(gray,s)
+        diagnostics = {}
     normal = normals(height,s)
     rough = roughness(height,s)
     ao = occlusion(height,s)
-    return {'albedo':image(base),'height':image(height),'normal':image(normal*.5+.5),
+    maps = {'albedo':image(base),'height':image(height),'normal':image(normal*.5+.5),
             'roughness':image(rough),'ao':image(ao),'preview':image(shade(base,normal,rough,ao,s)),
             'orm':image(np.stack([ao,rough,np.zeros_like(ao)],axis=2))}
+    maps.update(diagnostics)
+    return maps
 
 
 def seams(picture):

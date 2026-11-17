@@ -17,8 +17,9 @@ def bundle(catalog,p,editable=False):
         else:
             maps=render(p,catalog.source(p))
             for name,picture in maps.items():
-                if name!='preview':
-                    z.writestr(name+'.png',encode(picture))
+                if name=='preview' or name in ('height_raw','illumination','height_delight'):
+                    continue
+                z.writestr(name+'.png',encode(picture))
             z.writestr('material.json',json.dumps({'format':'loomlab-pbr-1','name':p['name'],
                 'revision':p['revision'],'size':p['settings']['size'],'normal_y':p['settings']['normal_y'],
                 'color_spaces':{'albedo':'sRGB','height':'linear','normal':'linear','roughness':'linear','ao':'linear','orm':'linear'},
